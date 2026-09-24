@@ -5,12 +5,16 @@
 - 调用中国福彩网官方开奖接口（服务端抓取，无跨域限制）
 - 有新期则自动合并到数据数组头部并写回
 - 无新期则静默退出（不产生提交）
+
+v2：详细错误诊断。失败时打印具体原因（超时/连接/HTTP状态/解析），便于定位。
 用法: python fetch_ssq.py
 """
 import json
 import re
+import sys
 import urllib.request
 import urllib.parse
+import urllib.error
 import datetime
 
 API = "https://www.cwl.gov.cn/cwl_admin/front/cwlkj/search/kjxx/findDrawNotice?" + urllib.parse.urlencode(
@@ -23,9 +27,22 @@ HEADERS = {
 
 
 def fetch_rows():
+    """返回 result 数组；失败时抛出带原因的异常。"""
     req = urllib.request.Request(API, headers=HEADERS)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=40) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+            print("[ok] cwl.gov.cn HTTP %d, %d bytes" % (resp.status, len(raw)))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("cwl.gov.cn HTTP %d %s" % (e.code, e.reason))
+    except urllib.error.URLError as e:
+        raise RuntimeError("cwl.gov.cn 网络错误: %r" % e.reason)
+    except Exception as e:
+        raise RuntimeError("cwl.gov.cn 未知错误: %r" % e)
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        raise RuntimeError("JSON 解析失败: %r，前200字节=%s" % (e, raw[:200]))
     return data.get("result") or []
 
 
@@ -44,7 +61,7 @@ def valid_row(r):
         return None
     if not 1 <= blue <= 16:
         return None
-    date = re.sub(r"\s*\(.*?\)\s*", "", str(r.get("date", ""))).strip()  # 去掉"(二)"星期后缀
+    date = re.sub(r"\s*\(.*?\)\s*", "", str(r.get("date", ""))).strip()
     return [str(r["code"]), date,
             *[str(v).zfill(2) for v in vals], str(blue).zfill(2)]
 
@@ -55,11 +72,18 @@ def main():
         with open(path, encoding="utf-8") as f:
             obj = json.load(f)
     except FileNotFoundError:
-        # 仓库还没有数据文件：用抓到的最近一期初始化（至少要 100 期才可用，提示人工补全）
         obj = {"updated": "", "latest": "", "data": []}
+    except Exception as e:
+        print("ERROR: 读取 %s 失败: %r" % (path, e))
+        sys.exit(1)
+    try:
+        rows = fetch_rows()
+    except RuntimeError as e:
+        print("ERROR: %s" % e)
+        sys.exit(1)
     existing = {r[0] for r in obj.get("data", [])}
     new_rows = []
-    for r in fetch_rows():
+    for r in rows:
         row = valid_row(r)
         if row and row[0] not in existing:
             new_rows.append(row)

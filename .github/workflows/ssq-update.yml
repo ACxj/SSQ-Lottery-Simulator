@@ -3,9 +3,9 @@ name: SSQ 数据自动更新
 on:
   schedule:
     # 北京时间 = UTC+8。开奖日为周二/周四/周日 21:15 前后，
-    # 这里在开奖日 13:00-15:00 UTC（21:00-23:00 北京时间）每 15 分钟检查一次
+    # 在开奖日 13:00-15:00 UTC（21:00-23:00 北京时间）每 15 分钟检查一次
     - cron: '0,15,30,45 13-15 * * 0,2,4'
-  workflow_dispatch:   # 支持在 GitHub 页面手动点「Run workflow」
+  workflow_dispatch:   # 支持手动点「Run workflow」
 
 permissions:
   contents: write
@@ -13,9 +13,17 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: 拉取仓库
         uses: actions/checkout@v4
+
+      - name: 环境诊断（确认文件与Python）
+        run: |
+          echo "=== 仓库文件 ==="
+          ls -la
+          echo "=== Python 版本 ==="
+          python --version
 
       - name: 配置 Python
         uses: actions/setup-python@v5
@@ -23,7 +31,10 @@ jobs:
           python-version: '3.11'
 
       - name: 运行数据更新脚本
-        run: python fetch_ssq.py
+        run: |
+          echo "=== 开始抓取 ==="
+          python fetch_ssq.py
+          echo "=== 脚本退出码: $? ==="
 
       - name: 有更新则提交并推送
         run: |
@@ -35,4 +46,5 @@ jobs:
           else
             git commit -m "auto update ssq data $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             git push
+            echo "pushed ok"
           fi
